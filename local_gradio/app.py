@@ -8,20 +8,19 @@ import gradio as gr
 import numpy as np
 import PIL.Image
 import torch
-try:
-    import intel_extension_for_pytorch as ipex
-except:
-    pass
 
-from diffusers import DiffusionPipeline
+from diffusers import AutoPipelineForText2Image
+from diffusers import LCMScheduler
+
 import torch
 
 import os
 import torch
-from tqdm import tqdm
 
 from concurrent.futures import ThreadPoolExecutor
 import uuid
+
+temp_model="114"
 
 DESCRIPTION = '''# Latent Consistency Model
 Distilled from [Dreamshaper v7](https://huggingface.co/Lykon/dreamshaper-7) fine-tune of [Stable Diffusion v1-5](https://huggingface.co/runwayml/stable-diffusion-v1-5) with only 4,000 training iterations (~32 A100 GPU Hours). [Project page](https://latent-consistency-models.github.io)
@@ -35,7 +34,7 @@ else:
 
 MAX_SEED = np.iinfo(np.int32).max
 CACHE_EXAMPLES = torch.cuda.is_available() and os.getenv("CACHE_EXAMPLES") == "1"
-MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "768"))
+MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1024"))
 USE_TORCH_COMPILE = os.getenv("USE_TORCH_COMPILE") == "1"
 
 
@@ -58,9 +57,13 @@ device = "cuda"   # Linux & Windows
 """
 DTYPE = torch.float16  # torch.float16 works as well, but pictures seem to be a bit worse
 
-pipe = DiffusionPipeline.from_pretrained("SimianLuo/LCM_Dreamshaper_v7")
-#pipe = DiffusionPipeline.from_pretrained("SimianLuo/LCM_Dreamshaper_v7", custom_pipeline="latent_consistency_txt2img", custom_revision="main")
-pipe.to(torch_device=device, torch_dtype=DTYPE)
+def load_model(model_path):
+    global pipe
+    pipe = AutoPipelineForText2Image.from_pretrained(model_path, variant="fp32",requires_safety_checker=False)
+    pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
+    cuda0 = torch.device('cuda:0')
+    pipe = pipe.to(cuda0, dtype=torch.float32,non_blocking=True)
+    return pipe
 
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
@@ -85,20 +88,25 @@ def save_images(image_array, profile: gr.OAuthProfile | None, metadata: dict):
 
 def generate(
     prompt: str,
+    model_path:str,
     seed: int = 0,
     width: int = 512,
     height: int = 512,
-    guidance_scale: float = 8.0,
-    num_inference_steps: int = 4,
+    guidance_scale: float = 2.0,
+    num_inference_steps: int = 15,
     num_images: int = 4,
     randomize_seed: bool = False,
-    param_dtype='torch.float16',
-    progress = gr.Progress(track_tqdm=True),
-    profile: gr.OAuthProfile | None = None,
+    profile: gr.OAuthProfile | None = None,    
 ) -> PIL.Image.Image:
+    global temp_model
+    global pipe
+    if model_path != temp_model:
+        load_model(model_path)
+        temp_model = model_path
+    cuda0 = torch.device('cuda:0')
+    pipe = pipe.to(cuda0, dtype=torch.float32,non_blocking=True)
     seed = randomize_seed_fn(seed, randomize_seed)
     torch.manual_seed(seed)
-    pipe.to(torch_device=device, torch_dtype=torch.float16 if param_dtype == 'torch.float16' else torch.float32)
     start_time = time.time()
     result = pipe(
         prompt=prompt,
@@ -115,7 +123,7 @@ def generate(
     return paths, seed
 
 examples = [
-    "portrait photo of a girl, photograph, highly detailed face, depth of field, moody light, golden hour, style by Dan Winters, Russell James, Steve McCurry, centered, extremely detailed, Nikon D850, award winning photography",
+    "portrait photo of a girl, photograph, highly detailed face, depth of field, moody light, golden hour, centered, extremely detailed,  award winning photography",
     "Self-portrait oil painting, a beautiful cyborg with golden hair, 8k",
     "Astronaut in a jungle, cold color palette, muted colors, detailed, 8k",
     "A photo of beautiful mountain with realistic sunset and blue lake, highly detailed, masterpiece",
@@ -172,7 +180,7 @@ with gr.Blocks(css="style.css") as demo:
                 minimum=2,
                 maximum=14,
                 step=0.1,
-                value=8.0,
+                value=2.0,
             )
             num_inference_steps = gr.Slider(
                 label="Number of inference steps for base",
@@ -190,11 +198,13 @@ with gr.Blocks(css="style.css") as demo:
                 value=2,
                 visible=True,
             )
-            dtype_choices = ['torch.float16','torch.float32']
-            param_dtype = gr.Radio(dtype_choices,label='torch.dtype',  
-                                      value=dtype_choices[0],
-                                      interactive=True,
-                                      info='To save GPU memory, use torch.float16. For better quality, use torch.float32.')
+        with gr.Row():
+            data = ['D://lcm//model//lcm-v8', 'D://lcm//model//lcm-v7', 'D://lcm//model//lcm-fast']
+            model_path = gr.Dropdown(
+                data,
+                label="Model",
+                )
+            
 
     # with gr.Accordion("Past generations", open=False):
     #     gr_user_history.render()
@@ -215,14 +225,14 @@ with gr.Blocks(css="style.css") as demo:
         fn=generate,
         inputs=[
             prompt,
+            model_path,
             seed,
             width,
             height,
             guidance_scale,
             num_inference_steps,
             num_images,
-            randomize_seed,
-            param_dtype
+            randomize_seed,               
         ],
         outputs=[result, seed],
         api_name="run",
@@ -231,4 +241,4 @@ with gr.Blocks(css="style.css") as demo:
 if __name__ == "__main__":
     demo.queue(api_open=False)
     # demo.queue(max_size=20).launch()
-    demo.launch()
+    demo.launch(server_name="0.0.0.0")
