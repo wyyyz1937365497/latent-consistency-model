@@ -65,6 +65,10 @@ def load_model(model_path):
     pipe = pipe.to(cuda0, dtype=torch.float32,non_blocking=True)
     return pipe
 
+def get_model_names(folder_path):
+    contents = os.listdir(folder_path)
+    model_names = [name for name in contents if os.path.isdir(os.path.join(folder_path, name))]
+    return model_names
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
     if randomize_seed:
@@ -101,7 +105,7 @@ def generate(
     global temp_model
     global pipe
     if model_path != temp_model:
-        load_model(model_path)
+        load_model(f'D://lcm//model//{model_path}')
         temp_model = model_path
     cuda0 = torch.device('cuda:0')
     pipe = pipe.to(cuda0, dtype=torch.float32,non_blocking=True)
@@ -123,7 +127,7 @@ def generate(
     return paths, seed
 
 examples = [
-    "portrait photo of a girl, photograph, highly detailed face, depth of field, moody light, golden hour, centered, extremely detailed,  award winning photography",
+    "portrait photo of a girl, photograph, highly detailed face, depth of field, moody light, centered, extremely detailed,  NSFW",
     "Self-portrait oil painting, a beautiful cyborg with golden hair, 8k",
     "Astronaut in a jungle, cold color palette, muted colors, detailed, 8k",
     "A photo of beautiful mountain with realistic sunset and blue lake, highly detailed, masterpiece",
@@ -199,7 +203,7 @@ with gr.Blocks(css="style.css") as demo:
                 visible=True,
             )
         with gr.Row():
-            data = ['D://lcm//model//lcm-v8', 'D://lcm//model//lcm-v7', 'D://lcm//model//lcm-fast']
+            data = get_model_names("D://lcm//model")
             model_path = gr.Dropdown(
                 data,
                 label="Model",
